@@ -9,22 +9,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           submodules: 'recursive'
-          ssh-key: ${{ secrets.SSH_KEY }}
           fetch-depth: 0
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v6
         with:
           distribution: 'temurin'
           java-version: '17'
           cache: 'gradle'
-      - uses: seanmiddleditch/gha-setup-ninja@master
-        with:
-          version: 1.12.0
+      - name: Install ninja
+        run: sudo apt install -y ninja-build
       - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
       - name: Build with Gradle
         run: |
           rm -rf $ANDROID_HOME/cmake

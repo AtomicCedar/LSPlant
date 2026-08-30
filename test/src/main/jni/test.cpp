@@ -1,11 +1,11 @@
 #include <jni.h>
 #include <dobby.h>
+#include "xdl.h"
 #include <sys/mman.h>
 #include <string_view>
 #include "logging.h"
 
 import lsplant;
-import lsparself;
 
 #define _uintval(p)               reinterpret_cast<uintptr_t>(p)
 #define _ptr(p)                   reinterpret_cast<void *>(p)
@@ -58,17 +58,22 @@ JNI_OnLoad(JavaVM* vm, void* reserved) {
     if (vm->GetEnv((void**) &env, JNI_VERSION_1_6) != JNI_OK) {
         return JNI_ERR;
     }
-    lsparself::Elf art("/libart.so");
+    void* art = xdl_open("libart.so", XDL_DEFAULT);
     lsplant::InitInfo initInfo{
             .inline_hooker = InlineHooker,
             .inline_unhooker = InlineUnhooker,
-            .art_symbol_resolver = [&art](std::string_view symbol) -> void* {
-                return art.getSymbAddress(symbol);
+            .art_symbol_resolver = [art](std::string_view symbol) -> void* {
+                size_t size;
+                void* address = xdl_sym(art, symbol.data(), &size);
+                if (address == nullptr) address = xdl_dsym(art, symbol.data(), &size);
+                return address;
             },
-            .art_symbol_prefix_resolver = [&art](auto symbol) {
-                return art.getSymbPrefixFirstAddress(symbol);
+            .art_symbol_prefix_resolver = [art](std::string_view symbol) -> void* {
+                size_t size;
+                return xdl_dsym(art, symbol.data(), &size);
             },
     };
     init_result = lsplant::Init(env, initInfo);
+    xdl_close(art);
     return JNI_VERSION_1_6;
 }
