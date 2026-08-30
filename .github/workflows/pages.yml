@@ -29,16 +29,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           submodules: 'recursive'
-          ssh-key: ${{ secrets.SSH_KEY }}
       - name: Install doxygen
         run: sudo apt install -y doxygen
       - name: Generate doxygen
         run: doxygen docs/doxygen.cfg
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v5
         with:
           # Upload entire repository
           path: 'docs/docs'
