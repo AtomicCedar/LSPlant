@@ -21,11 +21,8 @@ jobs:
           cache: 'gradle'
       - name: Install ninja
         run: sudo apt install -y ninja-build
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v4
       - name: Build with Gradle
         run: |
-          rm -rf $ANDROID_HOME/cmake
           ./gradlew :lsplant:publish
         env:
           ORG_GRADLE_PROJECT_signingKey: ${{ secrets.maven_pgp_signingKey }}
