@@ -152,7 +152,7 @@ private:
     static_assert(std::atomic<std::thread::id>::is_always_lock_free);
 
     [[gnu::cold, gnu::noinline]] static void WaitForInitializationSlow(std::thread::id thread_id) {
-        // JNI work in Init can reenter an installed hook on this thread.
+        // Installing hooks can reenter an already installed callback on this thread.
         if (thread_id == std::this_thread::get_id()) return;
         do {
             initializing_thread_id_.wait(thread_id, std::memory_order_acquire);

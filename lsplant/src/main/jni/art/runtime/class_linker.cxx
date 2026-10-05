@@ -241,6 +241,31 @@ private:
 
 public:
     static bool Init(JNIEnv *env, const HookHandler &handler) {
+        if (!handler(SetEntryPointsToInterpreter_)) [[likely]] {
+            if (handler(GetOptimizedCodeFor_, GetOptimizedCodeForL_, true)) [[likely]] {
+                auto obj = JNI_FindClass(env, "java/lang/Object");
+                if (!obj) {
+                    return false;
+                }
+                auto method = JNI_GetMethodID(env, obj, "equals", "(Ljava/lang/Object;)Z");
+                if (!method) {
+                    return false;
+                }
+                auto dummy = ArtMethod::FromReflectedMethod(
+                        env, JNI_ToReflectedMethod(env, obj, method, false).get())->Clone();
+                JavaDebuggableGuard guard;
+                // just in case
+                dummy->SetNonNative();
+                art_quick_to_interpreter_bridge_ = GetOptimizedCodeFor(dummy.get());
+            } else if (!handler(art_quick_to_interpreter_bridge_)) [[unlikely]] {
+                return false;
+            }
+            LOGD("art_quick_to_interpreter_bridge = %p", &art_quick_to_interpreter_bridge_);
+        }
+        return true;
+    }
+
+    static bool InitHooks(const HookHandler &handler) {
         int sdk_int = GetAndroidApiLevel();
 
         if (sdk_int >= kSdkNougat && sdk_int < kSdkTiramisu) {
@@ -268,27 +293,6 @@ public:
             }
         }
 
-        if (!handler(SetEntryPointsToInterpreter_)) [[likely]] {
-            if (handler(GetOptimizedCodeFor_, GetOptimizedCodeForL_, true)) [[likely]] {
-                auto obj = JNI_FindClass(env, "java/lang/Object");
-                if (!obj) {
-                    return false;
-                }
-                auto method = JNI_GetMethodID(env, obj, "equals", "(Ljava/lang/Object;)Z");
-                if (!method) {
-                    return false;
-                }
-                auto dummy = ArtMethod::FromReflectedMethod(
-                        env, JNI_ToReflectedMethod(env, obj, method, false).get())->Clone();
-                JavaDebuggableGuard guard;
-                // just in case
-                dummy->SetNonNative();
-                art_quick_to_interpreter_bridge_ = GetOptimizedCodeFor(dummy.get());
-            } else if (!handler(art_quick_to_interpreter_bridge_)) [[unlikely]] {
-                return false;
-            }
-            LOGD("art_quick_to_interpreter_bridge = %p", &art_quick_to_interpreter_bridge_);
-        }
         return true;
     }
 

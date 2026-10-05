@@ -88,8 +88,8 @@ struct InitInfo {
 /// You can obtain such a \ref JNIEnv in JNI_OnLoad().
 /// Internal hook callbacks on other threads wait until initialization succeeds or fails.
 /// Hooks reentered on the initializing thread execute without waiting.
-/// Initialize as early as possible: a waiting thread must not hold an ART lock or resource
-/// needed by the initializing thread.
+/// JNI preparation finishes before installing hooks, which runs with ART threads suspended.
+/// Inline hookers and symbol resolvers must not call JNI or wait for suspended ART threads.
 /// \param[in] env The Java environment. Must not be null.
 /// \param[in] info The information for initialized.
 /// Basically, the info provides the inline hooker and unhooker together with a symbol resolver of
