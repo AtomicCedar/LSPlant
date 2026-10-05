@@ -20,6 +20,7 @@ struct InitInfo {
     /// \p hooker is the hooker function to replace the \p target function.<br>
     /// \p return is the backup function that points to the previous target function.
     /// it should return null if hook fails and nonnull if successes.
+    /// It must not invoke the replacement synchronously before returning its backup.
     using InlineHookFunType = std::function<void *(void *target, void *hooker)>;
     /// \brief Type of inline unhook function.
     /// In \ref std::function form so that user can use lambda expression with capture list.<br>
@@ -85,6 +86,10 @@ struct InitInfo {
 /// It mainly prefetch needed symbols and hook some functions.
 /// The env should not have any restriction for accessing hidden APIs.
 /// You can obtain such a \ref JNIEnv in JNI_OnLoad().
+/// Internal hook callbacks on other threads wait until initialization succeeds or fails.
+/// Hooks reentered on the initializing thread execute without waiting.
+/// Initialize as early as possible: a waiting thread must not hold an ART lock or resource
+/// needed by the initializing thread.
 /// \param[in] env The Java environment. Must not be null.
 /// \param[in] info The information for initialized.
 /// Basically, the info provides the inline hooker and unhooker together with a symbol resolver of

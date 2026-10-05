@@ -1,8 +1,10 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <string_view>
+#include <thread>
 #include <type_traits>
 
 #include "lsplant.hpp"
@@ -145,6 +147,42 @@ private:
 };
 
 struct HookHandler {
+private:
+    inline static std::atomic<std::thread::id> initializing_thread_id_{};
+    static_assert(std::atomic<std::thread::id>::is_always_lock_free);
+
+    [[gnu::cold, gnu::noinline]] static void WaitForInitializationSlow(std::thread::id thread_id) {
+        // JNI work in Init can reenter an installed hook on this thread.
+        if (thread_id == std::this_thread::get_id()) return;
+        do {
+            initializing_thread_id_.wait(thread_id, std::memory_order_acquire);
+            thread_id = initializing_thread_id_.load(std::memory_order_acquire);
+        } while (thread_id != std::thread::id{});
+    }
+
+public:
+    class InitScope {
+    public:
+        InitScope() {
+            // Publish the owner before installing any hook callbacks.
+            initializing_thread_id_.store(std::this_thread::get_id(), std::memory_order_relaxed);
+        }
+        InitScope(const InitScope &) = delete;
+        InitScope &operator=(const InitScope &) = delete;
+        ~InitScope() {
+            // Publish initialization writes and wake waiters on every exit path.
+            initializing_thread_id_.store(std::thread::id{}, std::memory_order_release);
+            initializing_thread_id_.notify_all();
+        }
+    };
+
+    [[gnu::always_inline]] static void WaitForInitialization() {
+        auto thread_id = initializing_thread_id_.load(std::memory_order_acquire);
+        if (thread_id != std::thread::id{}) [[unlikely]] {
+            WaitForInitializationSlow(thread_id);
+        }
+    }
+
     HookHandler(const InitInfo &info) : info_(info) {}
 
     template <typename T>
@@ -235,7 +273,25 @@ struct Symbol {
         }
     }()) as{};
 
-    [[no_unique_address]] struct Hook {
+    template <bool kWaitForInitialization>
+    struct Hook {
+        template <typename HookerType, typename F>
+        static consteval auto MakeHooker() {
+            using BackupType = typename HookerType::Function;
+            constexpr auto replace = static_cast<decltype(HookerType::replace_)>(
+                &F::template operator()<BackupType{}>);
+            if constexpr (!kWaitForInitialization) {
+                return HookerType{replace};
+            } else {
+                return []<typename Ret, typename... Args>(Ret (*)(Args...)) {
+                    return HookerType{+[](Args... args) static -> Ret {
+                        HookHandler::WaitForInitialization();
+                        return F::template operator()<BackupType{}>(std::forward<Args>(args)...);
+                    }};
+                }(replace);
+            }
+        }
+
         template <typename F>
         consteval auto operator->*(F && /*unused*/) const {
             using Signature = decltype(F::template operator()<&decltype([] static {})::operator()>);
@@ -245,17 +301,17 @@ struct Symbol {
                                            Ret (*)(This *, Args...)) -> Ret (This::*)(Args...) {
                                return {};
                            }.template operator()(std::declval<Signature>()))>;
-                using BackupType = typename HookerType::Function;
-                return HookerType{static_cast<decltype(HookerType::replace_)>(
-                    &F::template operator()<BackupType{}>)};
+                return MakeHooker<HookerType, F>();
             } else {
                 using HookerType = Hooker<S, Signature>;
-                using BackupType = typename HookerType::Function;
-                return HookerType{static_cast<decltype(HookerType::replace_)>(
-                    &F::template operator()<BackupType{}>)};
+                return MakeHooker<HookerType, F>();
             }
         };
-    } hook;
+    };
+
+    [[no_unique_address]] Hook<true> hook;
+    // Custom ABI callbacks must provide the initialization barrier themselves.
+    [[no_unique_address]] Hook<false> raw_hook;
 };
 
 template <typename T, T... Cs>

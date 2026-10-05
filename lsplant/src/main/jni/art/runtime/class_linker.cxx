@@ -143,11 +143,13 @@ private:
     // regparm(3) assigns EAX, EDX, ECX. The unused first argument leaves
     // self in EDX and this in ECX, matching ART's internal fastcc ABI.
     inline static auto FixupStaticTrampolinesWithThread_ =
-        "_ZN3art11ClassLinker22FixupStaticTrampolinesEPNS_6ThreadENS_6ObjPtrINS_6mirror5ClassEEE"_sym.hook->*[]
+        "_ZN3art11ClassLinker22FixupStaticTrampolinesEPNS_6ThreadENS_6ObjPtrINS_6mirror5ClassEEE"_sym.raw_hook->*[]
         <Backup auto backup> [[gnu::regparm(3), gnu::force_align_arg_pointer, gnu::noinline]]
         (void *, Thread *register_self, ClassLinker *register_this,
          void *stack_this_or_class, Thread *stack_self,
          ObjPtr<mirror::Class> stack_class) static -> void {
+            HookHandler::WaitForInitialization();
+
             // Forward both layouts; ART consumes only the slots belonging to its ABI.
             backup(nullptr, register_self, register_this, stack_this_or_class, stack_self,
                    stack_class);

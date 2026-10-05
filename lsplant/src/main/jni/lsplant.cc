@@ -802,7 +802,10 @@ using ::lsplant::IsHooked;
         LOGE("Invalid init info");
         return false;
     }
-    bool static kInit = InitConfig(info) && InitJNI(env) && InitNative(env, info);
+    bool static kInit = [&] {
+        HookHandler::InitScope scope;
+        return InitConfig(info) && InitJNI(env) && InitNative(env, info);
+    }();
     return kInit;
 }
 
