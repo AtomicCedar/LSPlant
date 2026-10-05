@@ -139,6 +139,21 @@ private:
             RestoreBackup(mirror_class->GetClassDef(), nullptr);
         };
 
+#ifdef __i386__
+    // regparm(3) assigns EAX, EDX, ECX. The unused first argument leaves
+    // self in EDX and this in ECX, matching ART's internal fastcc ABI.
+    inline static auto FixupStaticTrampolinesWithThread_ =
+        "_ZN3art11ClassLinker22FixupStaticTrampolinesEPNS_6ThreadENS_6ObjPtrINS_6mirror5ClassEEE"_sym.hook->*[]
+        <Backup auto backup> [[gnu::regparm(3), gnu::force_align_arg_pointer, gnu::noinline]]
+        (void *, Thread *register_self, ClassLinker *register_this,
+         void *stack_this_or_class, Thread *stack_self,
+         ObjPtr<mirror::Class> stack_class) static -> void {
+            // Forward both layouts; ART consumes only the slots belonging to its ABI.
+            backup(nullptr, register_self, register_this, stack_this_or_class, stack_self,
+                   stack_class);
+            RestoreBackup(nullptr, Thread::Current());
+        };
+#else
     inline static auto FixupStaticTrampolinesWithThread_ =
         "_ZN3art11ClassLinker22FixupStaticTrampolinesEPNS_6ThreadENS_6ObjPtrINS_6mirror5ClassEEE"_sym.hook->*[]
         <MemBackup auto backup>
@@ -146,6 +161,7 @@ private:
             backup(thiz, self, mirror_class);
             RestoreBackup(mirror_class->GetClassDef(), self);
         };
+#endif
 
     inline static auto FixupStaticTrampolinesRaw_ =
         "_ZN3art11ClassLinker22FixupStaticTrampolinesEPNS_6mirror5ClassE"_sym.hook->*[]
@@ -229,10 +245,9 @@ public:
             handler(ShouldUseInterpreterEntrypoint_);
         }
 
-        if (!handler(FixupStaticTrampolinesWithThread_, FixupStaticTrampolines_,
-                          FixupStaticTrampolinesRaw_)) {
-            return false;
-        }
+        // ART may inline these methods, so their absence is not an initialization failure.
+        handler(FixupStaticTrampolinesWithThread_, FixupStaticTrampolines_,
+                FixupStaticTrampolinesRaw_);
 
         auto register_native_hooked = sdk_int >= kSdkOreo && sdk_int < kSdkPie
                                           ? handler(RegisterNativeFastWithReturn_)
