@@ -269,6 +269,7 @@ inline void UpdateTrampoline(uint8_t offset) {
 }
 
 bool InitNative(JNIEnv *env, const HookHandler &handler) {
+    // Complete JNI work, including local-reference cleanup, before installing any hooks.
     if (!ArtMethod::Init(env, handler)) {
         LOGE("Failed to init art method");
         return false;
@@ -276,10 +277,6 @@ bool InitNative(JNIEnv *env, const HookHandler &handler) {
     UpdateTrampoline(ArtMethod::GetEntryPointOffset());
     if (!Thread::Init(handler)) {
         LOGE("Failed to init thread");
-        return false;
-    }
-    if (!Class::Init(handler)) {
-        LOGE("Failed to init mirror class");
         return false;
     }
     if (!Runtime::Init(handler)) {
@@ -298,6 +295,29 @@ bool InitNative(JNIEnv *env, const HookHandler &handler) {
         LOGE("Failed to init scoped gc critical section");
         return false;
     }
+    if (!DexFile::Init(env, handler)) {
+        LOGE("Failed to init dex file");
+        return false;
+    }
+    const bool java_debuggable = IsJavaDebuggable(env);
+
+    // Acquire ART's GC/suspension guards before a hook can block a runnable thread.
+    // No JNI calls are allowed while these guards are held.
+    ScopedGCCriticalSection section(Thread::Current(), art::gc::kGcCauseDebugger,
+                                    art::gc::kCollectorTypeDebugger);
+    ScopedSuspendAll suspend("LSPlant Init", false);
+    // Release waiting callbacks before resuming threads or allowing GC, on every exit path.
+    HookHandler::InitScope scope;
+
+    ArtMethod::InitHooks(handler);
+    if (!Class::Init(handler)) {
+        LOGE("Failed to init mirror class");
+        return false;
+    }
+    if (!ClassLinker::InitHooks(handler)) {
+        LOGE("Failed to hook class linker");
+        return false;
+    }
     if (!JitCodeCache::Init(handler)) {
         LOGE("Failed to init jit code cache");
         return false;
@@ -306,21 +326,17 @@ bool InitNative(JNIEnv *env, const HookHandler &handler) {
         LOGE("Failed to init jit");
         return false;
     }
-    if (!DexFile::Init(env, handler)) {
-        LOGE("Failed to init dex file");
-        return false;
-    }
-    if (!Instrumentation::Init(env, handler)) {
+    if (!Instrumentation::Init(java_debuggable, handler)) {
         LOGE("Failed to init instrumentation");
         return false;
     }
-    if (!JniIdManager::Init(env, handler)) {
+    if (!JniIdManager::Init(java_debuggable, handler)) {
         LOGE("Failed to init jni id manager");
         return false;
     }
 
     // This should always be the last one
-    if (IsJavaDebuggable(env)) {
+    if (java_debuggable) {
         // Make the runtime non-debuggable as a workaround
         // when ShouldUseInterpreterEntrypoint inlined
         Runtime::Current()->SetJavaDebuggable(Runtime::RuntimeDebugState::kNonJavaDebuggable);

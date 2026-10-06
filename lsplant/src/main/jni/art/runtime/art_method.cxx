@@ -376,8 +376,6 @@ public:
                 env, JNI_ToReflectedMethod(env, executable, executable_get_name, false).get());
             if (!abstract_method_ || !abstract_method_->IsAbstract()) [[unlikely]] {
                 LOGW("Abstract method Executable.getName not found");
-            } else if (!handler(GetQuickFrameInfo_)) [[unlikely]] {
-                LOGW("Failed to hook GetQuickFrameInfo, hooking proxy method may crash");
             }
         }
         if (sdk_int < kSdkNougat) {
@@ -393,6 +391,13 @@ public:
         }
 
         return true;
+    }
+
+    static void InitHooks(const HookHandler &handler) {
+        if (GetAndroidApiLevel() == kSdkMarshmallow && abstract_method_ &&
+            abstract_method_->IsAbstract() && !handler(GetQuickFrameInfo_)) [[unlikely]] {
+            LOGW("Failed to hook GetQuickFrameInfo, hooking proxy method may crash");
+        }
     }
 
     static size_t GetEntryPointOffset() { return entry_point_offset; }

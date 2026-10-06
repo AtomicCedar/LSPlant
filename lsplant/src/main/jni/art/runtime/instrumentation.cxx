@@ -60,8 +60,8 @@ export class Instrumentation {
         };
 
 public:
-    static bool Init(JNIEnv *env, const HookHandler &handler) {
-        if (!IsJavaDebuggable(env)) [[likely]] {
+    static bool Init(bool java_debuggable, const HookHandler &handler) {
+        if (!java_debuggable) [[likely]] {
             return true;
         }
         int sdk_int = GetAndroidApiLevel();

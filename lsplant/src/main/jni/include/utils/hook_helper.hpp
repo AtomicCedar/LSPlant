@@ -1,8 +1,10 @@
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <string_view>
+#include <thread>
 #include <type_traits>
 
 #include "lsplant.hpp"
@@ -21,12 +23,12 @@ struct FixedString {
 template <typename T>
 concept FuncType = std::is_function_v<T> || std::is_member_function_pointer_v<T>;
 
-template <FixedString, FuncType>
-struct Function;
+template <FixedString Sym, FuncType Signature>
+struct Function {
+    static_assert(std::is_function_v<Signature>);
 
-template <FixedString Sym, typename Ret, typename... Args>
-struct Function<Sym, Ret(Args...)> {
-    [[gnu::always_inline]] static Ret operator()(Args... args) {
+    template <typename... Args>
+    [[gnu::always_inline]] static decltype(auto) operator()(Args &&...args) {
         return inner_.function_(std::forward<Args>(args)...);
     }
     [[gnu::always_inline]] operator bool() const { return inner_.raw_function_ != nullptr; }
@@ -38,7 +40,7 @@ struct Function<Sym, Ret(Args...)> {
 
 private:
     inline static union {
-        Ret (*function_)(Args...);
+        std::add_pointer_t<Signature> function_;
         void *raw_function_ = nullptr;
     } inner_;
 
@@ -124,41 +126,20 @@ private:
     static_assert(sizeof(inner_.field_) == sizeof(inner_.raw_field_));
 };
 
-template <FixedString, FuncType>
-struct Hooker;
-
-template <FixedString Sym, typename Ret, typename... Args>
-struct Hooker<Sym, Ret(Args...)> : Function<Sym, Ret(Args...)> {
+template <FixedString Sym, FuncType Signature>
+struct Hooker : Function<Sym, Signature> {
     [[gnu::always_inline]] auto &operator=(void *function) const {
         Hooker::Function::operator=(function);
         return *this;
     }
 
 private:
-    consteval Hooker(Ret (*replace)(Args...)) : replace_{replace} {};
+    using Replacement = decltype(&std::declval<Function<Sym, Signature>>());
+    consteval Hooker(Replacement replace) : replace_{replace} {};
 
     inline static void *address_ = nullptr;
 
-    Ret (*replace_)(Args...);
-
-    friend struct HookHandler;
-    template <FixedString S>
-    friend struct Symbol;
-};
-
-template <FixedString Sym, class This, typename Ret, typename... Args>
-struct Hooker<Sym, Ret (This::*)(Args...)> : Function<Sym, Ret (This::*)(Args...)> {
-    [[gnu::always_inline]] auto &operator=(void *function) const {
-        Hooker::Function::operator=(function);
-        return *this;
-    }
-
-private:
-    consteval Hooker(Ret (*replace)(This *, Args...)) : replace_{replace} {};
-
-    inline static void *address_ = nullptr;
-
-    Ret (*replace_)(This *, Args...);
+    Replacement replace_;
 
     friend struct HookHandler;
     template <FixedString S>
@@ -166,6 +147,42 @@ private:
 };
 
 struct HookHandler {
+private:
+    inline static std::atomic<std::thread::id> initializing_thread_id_{};
+    static_assert(std::atomic<std::thread::id>::is_always_lock_free);
+
+    [[gnu::cold, gnu::noinline]] static void WaitForInitializationSlow(std::thread::id thread_id) {
+        // Installing hooks can reenter an already installed callback on this thread.
+        if (thread_id == std::this_thread::get_id()) return;
+        do {
+            initializing_thread_id_.wait(thread_id, std::memory_order_acquire);
+            thread_id = initializing_thread_id_.load(std::memory_order_acquire);
+        } while (thread_id != std::thread::id{});
+    }
+
+public:
+    class InitScope {
+    public:
+        InitScope() {
+            // Publish the owner before installing any hook callbacks.
+            initializing_thread_id_.store(std::this_thread::get_id(), std::memory_order_relaxed);
+        }
+        InitScope(const InitScope &) = delete;
+        InitScope &operator=(const InitScope &) = delete;
+        ~InitScope() {
+            // Publish initialization writes and wake waiters on every exit path.
+            initializing_thread_id_.store(std::thread::id{}, std::memory_order_release);
+            initializing_thread_id_.notify_all();
+        }
+    };
+
+    [[gnu::always_inline]] static void WaitForInitialization() {
+        auto thread_id = initializing_thread_id_.load(std::memory_order_acquire);
+        if (thread_id != std::thread::id{}) [[unlikely]] {
+            WaitForInitializationSlow(thread_id);
+        }
+    }
+
     HookHandler(const InitInfo &info) : info_(info) {}
 
     template <typename T>
@@ -232,8 +249,15 @@ private:
     const InitInfo &info_;
 };
 
+template <typename>
+inline constexpr bool is_function_wrapper_v = false;
+
+template <FixedString Sym, FuncType Signature>
+inline constexpr bool is_function_wrapper_v<Function<Sym, Signature>> = true;
+
 template <typename F>
-concept Backup = std::is_function_v<std::remove_pointer_t<F>>;
+concept Backup =
+    std::is_function_v<std::remove_pointer_t<F>> || is_function_wrapper_v<std::remove_cv_t<F>>;
 
 template <typename F>
 concept MemBackup = std::is_member_function_pointer_v<std::remove_pointer_t<F>> || Backup<F>;
@@ -249,7 +273,25 @@ struct Symbol {
         }
     }()) as{};
 
-    [[no_unique_address]] struct Hook {
+    template <bool kWaitForInitialization>
+    struct Hook {
+        template <typename HookerType, typename F>
+        static consteval auto MakeHooker() {
+            using BackupType = typename HookerType::Function;
+            constexpr auto replace = static_cast<decltype(HookerType::replace_)>(
+                &F::template operator()<BackupType{}>);
+            if constexpr (!kWaitForInitialization) {
+                return HookerType{replace};
+            } else {
+                return []<typename Ret, typename... Args>(Ret (*)(Args...)) {
+                    return HookerType{+[](Args... args) static -> Ret {
+                        HookHandler::WaitForInitialization();
+                        return F::template operator()<BackupType{}>(std::forward<Args>(args)...);
+                    }};
+                }(replace);
+            }
+        }
+
         template <typename F>
         consteval auto operator->*(F && /*unused*/) const {
             using Signature = decltype(F::template operator()<&decltype([] static {})::operator()>);
@@ -259,19 +301,17 @@ struct Symbol {
                                            Ret (*)(This *, Args...)) -> Ret (This::*)(Args...) {
                                return {};
                            }.template operator()(std::declval<Signature>()))>;
-                return HookerType {
-                    static_cast<decltype(HookerType::replace_)>(
-                        &F::template operator()<HookerType::operator()>)
-                };
+                return MakeHooker<HookerType, F>();
             } else {
                 using HookerType = Hooker<S, Signature>;
-                return HookerType {
-                    static_cast<decltype(HookerType::replace_)>(
-                        &F::template operator()<HookerType::operator()>)
-                };
+                return MakeHooker<HookerType, F>();
             }
         };
-    } hook;
+    };
+
+    [[no_unique_address]] Hook<true> hook;
+    // Custom ABI callbacks must provide the initialization barrier themselves.
+    [[no_unique_address]] Hook<false> raw_hook;
 };
 
 template <typename T, T... Cs>
