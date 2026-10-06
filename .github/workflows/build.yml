@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ ubuntu-latest ]
+        os: [ ubuntu-24.04 ]
 
     steps:
       - name: Check out
@@ -57,7 +57,7 @@ jobs:
   test:
     needs: build
     name: Test on API ${{ matrix.android.api }} ${{ matrix.android.arch }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
