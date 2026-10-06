@@ -31,9 +31,6 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
           cache: 'gradle'
-      - uses: seanmiddleditch/gha-setup-ninja@master
-        with:
-          version: 1.12.1
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1
         with:
@@ -108,9 +105,6 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
           cache: 'gradle'
-      - uses: seanmiddleditch/gha-setup-ninja@master
-        with:
-          version: 1.12.1
       - name: ccache
         uses: hendrikmuhs/ccache-action@v1
         with:
@@ -179,9 +173,6 @@ jobs:
         run: |
           .github/cuttlefish.sh setup
           .github/cuttlefish.sh download ${{ matrix.branch }} ${{ matrix.device }}
-          curl -LO https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-linux.zip
-          unzip ninja-linux.zip -d $ANDROID_HOME/platform-tools
-          chmod +x $ANDROID_HOME/platform-tools/ninja
           ccache -o cache_dir=${{ github.workspace }}/.ccache
           ccache -o hash_dir=false
           ccache -o compiler_check='%compiler% -dumpmachine; %compiler% -dumpversion'
