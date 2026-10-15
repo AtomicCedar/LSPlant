@@ -303,8 +303,7 @@ bool InitNative(JNIEnv *env, const HookHandler &handler) {
 
     // Acquire ART's GC/suspension guards before a hook can block a runnable thread.
     // No JNI calls are allowed while these guards are held.
-    ScopedGCCriticalSection section(Thread::Current(), art::gc::kGcCauseDebugger,
-                                    art::gc::kCollectorTypeDebugger);
+    ScopedGCCriticalSection section(art::Thread::Current(), art::gc::kGcCauseDebugger, art::gc::kCollectorTypeDebugger);
     ScopedSuspendAll suspend("LSPlant Init", false);
     // Release waiting callbacks before resuming threads or allowing GC, on every exit path.
     HookHandler::InitScope scope;
@@ -695,8 +694,7 @@ void *GenerateTrampolineFor(art::ArtMethod *hook) {
 }
 
 bool DoHook(ArtMethod *target, ArtMethod *hook, ArtMethod *backup) {
-    ScopedGCCriticalSection section(art::Thread::Current(), art::gc::kGcCauseDebugger,
-                                    art::gc::kCollectorTypeDebugger);
+    ScopedGCCriticalSection section(art::Thread::Current(), art::gc::kGcCauseDebugger, art::gc::kCollectorTypeDebugger);
     ScopedSuspendAll suspend("LSPlant Hook", false);
     LOGV("Hooking: target = %s(%p), hook = %s(%p), backup = %s(%p)", target->PrettyMethod().c_str(),
          target, hook->PrettyMethod().c_str(), hook, backup->PrettyMethod().c_str(), backup);
@@ -725,8 +723,7 @@ bool DoHook(ArtMethod *target, ArtMethod *hook, ArtMethod *backup) {
 }
 
 bool DoUnHook(ArtMethod *target, ArtMethod *backup) {
-    ScopedGCCriticalSection section(art::Thread::Current(), art::gc::kGcCauseDebugger,
-                                    art::gc::kCollectorTypeDebugger);
+    ScopedGCCriticalSection section(art::Thread::Current(), art::gc::kGcCauseDebugger, art::gc::kCollectorTypeDebugger);
     ScopedSuspendAll suspend("LSPlant Hook", false);
     LOGV("Unhooking: target = %p, backup = %p", target, backup);
     auto access_flags = target->GetAccessFlags();
@@ -891,6 +888,15 @@ using ::lsplant::IsHooked;
 
     JNI_SetStaticObjectField(env, built_class, hooker_field, hooker_object);
 
+    // Pre-create the backup's global reference *before* patching the entry point:
+    // if NewGlobalRef fails (OOM) we must not leave the hook installed while
+    // reporting failure.
+    jobject global_backup = JNI_NewGlobalRef(env, reflected_backup);
+    if (!global_backup) {
+        LOGE("Failed to create global ref for backup method");
+        return nullptr;
+    }
+
     if (DoHook(target, hook, backup)) {
         std::apply(
             [backup_method, target_method_id = env->FromReflectedMethod(target_method)](auto... v) {
@@ -899,7 +905,6 @@ using ::lsplant::IsHooked;
                  ...);
             },
             kInternalMethods);
-        jobject global_backup = JNI_NewGlobalRef(env, reflected_backup);
         RecordHooked(target, target->GetDeclaringClass()->GetClassDef(), global_backup, backup);
         if (!is_proxy) [[likely]] {
             RecordJitMovement(target, backup);
@@ -913,6 +918,8 @@ using ::lsplant::IsHooked;
         return global_backup;
     }
 
+    // DoHook failed: release the pre-created global reference.
+    env->DeleteGlobalRef(global_backup);
     return nullptr;
 }
 
