@@ -97,7 +97,6 @@ android {
 dependencies {
     implementation(project(":lsplant"))
     implementation(libs.dobby)
-    implementation(libs.xdl)
 
     androidTestImplementation(libs.test.ext.junit)
     androidTestImplementation(libs.test.runner)

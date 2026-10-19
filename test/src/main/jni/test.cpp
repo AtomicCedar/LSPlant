@@ -1,6 +1,6 @@
 #include <jni.h>
 #include <dobby.h>
-#include "xdl.h"
+#include "xdl/include/xdl.h"
 #include <sys/mman.h>
 #include <string_view>
 #include "logging.h"
